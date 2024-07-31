@@ -1,0 +1,223 @@
+'''import requests
+
+api_keys = 'f5ce57ac083b09535b11cec55b027465'
+
+user_input = input("ENTER THE REQUIRED LOCATION: ")
+
+weather_data = requests.get(
+    f"https://api.openweathermap.org/data/2.5/weather?q={user_input}&units=imperial&APPID={api_keys}")
+
+if weather_data.status_code == 200:
+    data = weather_data.json()
+    main = data['main']
+    wind = data['wind']
+    weather = data['weather'][0]
+
+    print(f"Weather in {user_input.capitalize()}:")
+    print(f"Description: {weather['description']}")
+    print(f"Temperature: {main['temp']}°F")
+    print(f"Feels Like: {main['feels_like']}°F")
+    print(f"Humidity: {main['humidity']}%")
+    print(f"Pressure: {main['pressure']} hPa")
+    print(f"Wind Speed: {wind['speed']} mph")
+    print(f"Wind Direction: {wind['deg']}°")
+
+else:
+    print(f"Error {weather_data.status_code}: Unable to retrieve data")
+'''
+
+
+import pandas as pd
+import requests
+from datetime import datetime
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score, mean_squared_error
+
+# OpenWeatherMap API key
+api_key = 'f5ce57ac083b09535b11cec55b027465'
+
+def load_data(file_path):
+    try:
+        df = pd.read_csv(file_path)
+        return df
+    except FileNotFoundError:
+        print(f"Error: File '{file_path}' not found.")
+        return None
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        return None
+
+def get_weather_data(location):
+    try:
+        # Request weather data from OpenWeatherMap API
+        url = f"https://api.openweathermap.org/data/2.5/forecast?q={location}&units=imperial&appid={api_key}"
+        response = requests.get(url)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"Error fetching weather data. Status code: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"Error fetching weather data: {e}")
+        return None
+
+def train_demand_models(data):
+    if data is None or 'Date' not in data.columns:
+        print("Error: Required columns not found in the dataset.")
+        return None, None
+    
+    # Prepare data for RandomForestRegressor models
+    X_rf = data[['Date']].copy()
+    y_rf = data.drop(columns=['Date'])
+    
+    # Attempt to infer datetime format
+    try:
+        X_rf['Date'] = pd.to_datetime(X_rf['Date'], infer_datetime_format=True)
+    except ValueError:
+        print("Error: Unable to infer datetime format. Please check the Date column in your dataset.")
+        return None, None
+    
+    X_rf['DayOfYear'] = X_rf['Date'].dt.dayofyear
+    
+    X_train_rf, X_test_rf, y_train_rf, y_test_rf = train_test_split(X_rf[['DayOfYear']], y_rf, test_size=0.2, random_state=42)
+    
+    models_rf = {}
+    for fruit in y_rf.columns:
+        model_rf = RandomForestRegressor(n_estimators=100, random_state=42)
+        model_rf.fit(X_train_rf, y_train_rf[fruit])
+        models_rf[fruit] = model_rf
+        
+        y_pred_rf = model_rf.predict(X_test_rf)
+        r2_rf = r2_score(y_test_rf[fruit], y_pred_rf)
+        mse_rf = mean_squared_error(y_test_rf[fruit], y_pred_rf)
+        
+        print(f"RandomForestRegressor Model trained successfully for {fruit}. R2: {r2_rf:.2f}, MSE: {mse_rf:.2f}")
+    
+    # Prepare data for ML model (example: LinearRegression)
+    X_ml = X_rf[['DayOfYear']].copy()
+    models_ml = {}
+    for fruit in y_rf.columns:
+        y_ml = data[fruit]
+        X_train_ml, X_test_ml, y_train_ml, y_test_ml = train_test_split(X_ml, y_ml, test_size=0.2, random_state=42)
+        
+        model_ml = LinearRegression()
+        model_ml.fit(X_train_ml, y_train_ml)
+        
+        y_pred_ml = model_ml.predict(X_test_ml)
+        r2_ml = r2_score(y_test_ml, y_pred_ml)
+        mse_ml = mean_squared_error(y_test_ml, y_pred_ml)
+        
+        models_ml[fruit] = model_ml
+        
+        print(f"ML Model (LinearRegression) trained successfully for {fruit}. R2: {r2_ml:.2f}, MSE: {mse_ml:.2f}")
+    
+    return models_rf, models_ml
+
+def predict_demand(models_rf, models_ml, location):
+    try:
+        # Get weather forecast data for the location
+        weather_data = get_weather_data(location)
+        if weather_data is None or 'list' not in weather_data:
+            print(f"No weather data found for {location}. Predicting demand without weather considerations.")
+            return None
+        
+        # Extract the forecast for the next 7 days
+        forecast = weather_data['list']
+        
+        # Initialize variables to accumulate output
+        output = []
+        rainy_day_predicted = False
+        
+        output.append(f"Weather in {location} (Indian Standard Time):")
+        
+        # Time slots for IST (morning, afternoon, evening, night)
+        time_slots = ['3:00 AM (Night)', '9:00 AM (Morning)', '3:00 PM (Afternoon)', '9:00 PM (Evening)']
+        
+        # Iterate over the forecast data
+        previous_day = None
+        for i, entry in enumerate(forecast):
+            date_time = datetime.strptime(entry['dt_txt'], '%Y-%m-%d %H:%M:%S')
+            day_name = date_time.strftime('%A')
+            date_str = date_time.strftime('%Y-%m-%d')
+            
+            # Only print the day and date if it's a new day
+            if previous_day != date_str:
+                output.append(f"{day_name}, {date_str}:")
+                previous_day = date_str
+            
+            # Determine the time slot based on index
+            slot = time_slots[i % 4]
+            
+            weather_description = entry['weather'][0]['description']
+            temperature = entry['main']['temp']
+            feels_like = entry['main']['feels_like']
+            humidity = entry['main']['humidity']
+            pressure = entry['main']['pressure']
+            wind_speed = entry['wind']['speed']
+            wind_direction = entry['wind']['deg']
+            
+            output.append(f"{slot}:")
+            output.append(f"Description: {weather_description}")
+            output.append(f"Temperature: {temperature}°F")
+            output.append(f"Feels Like: {feels_like}°F")
+            output.append(f"Humidity: {humidity}%")
+            output.append(f"Pressure: {pressure} hPa")
+            output.append(f"Wind Speed: {wind_speed} mph")
+            output.append(f"Wind Direction: {wind_direction}°")
+            output.append("")  # Blank line for separation
+            
+            # Check if it's raining
+            if 'rain' in weather_description.lower() or 'thunderstorm' in weather_description.lower() or 'drizzle' in weather_description.lower():
+                rainy_day_predicted = True
+                output.append(f"⛈️ Rainy period detected: {day_name}, {slot}")
+        
+        if not rainy_day_predicted:
+            output.append("No rainy days predicted in the upcoming forecast.")
+            print("\n".join(output))
+            return None
+        
+        # Predict demand for rainy days
+        output.append("Predicted Demand for Rainy Days (Indian Standard Time):")
+        for fruit, model_rf in models_rf.items():
+            future_date_str = forecast[0]['dt_txt'][:10]
+            dayofyear = pd.to_datetime(future_date_str, format='%Y-%m-%d').dayofyear
+            
+            predicted_demand_rf = model_rf.predict([[dayofyear]])[0] * 1.5  # Increase demand by 1.5x
+            output.append(f"{future_date_str}: {fruit} (RF Model): {predicted_demand_rf:.2f} kgs")
+        
+        # Print recorded rainy climate
+        output.append("")
+        output.append("Recorded Rainy Climate:")
+        for entry in forecast:
+            if 'rain' in entry['weather'][0]['description'].lower():
+                date_time = datetime.strptime(entry['dt_txt'], '%Y-%m-%d %H:%M:%S')
+                day_name = date_time.strftime('%A')
+                slot = time_slots[date_time.hour // 6]
+                output.append(f"{day_name}, {date_time.strftime('%Y-%m-%d')} at {slot}")
+        
+        # Print accumulated output
+        print("\n".join(output))
+        
+        return output
+    
+    except Exception as e:
+        print(f"Error predicting demand: {e}")
+        return None
+
+if __name__ == "__main__":
+    file_path = 'fruit_data.csv'
+    
+    # Load data
+    data = load_data(file_path)
+    
+    # Train the demand models
+    models_rf, models_ml = train_demand_models(data)
+    
+    if models_rf and models_ml:
+        # Get user input for location
+        user_location = input("Enter the required location: ")
+        
+        # Predict demand for rainy days
+        predict_demand(models_rf, models_ml, user_location)
